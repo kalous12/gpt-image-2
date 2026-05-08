@@ -41,10 +41,10 @@ describe('Images API', () => {
     expect(res.body[0].data).toBeUndefined();
   });
 
-  it('GET /api/images/:id/data returns image data', async () => {
+  it('GET /api/images/:id/data returns 410 (deprecated endpoint)', async () => {
     const res = await request(app).get('/api/images/1/data?type=user');
-    expect(res.status).toBe(200);
-    expect(res.body.data).toBe('data:image/png;base64,iVBORw0KGgo=');
+    expect(res.status).toBe(410);
+    expect(res.body.error).toContain('deprecated');
   });
 
   it('DELETE /api/images/:id removes image', async () => {
