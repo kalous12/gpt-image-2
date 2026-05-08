@@ -1,4 +1,4 @@
-const BASE = 'http://localhost:3001/api';
+const BASE = `http://${window.location.hostname}:3001/api`;
 
 async function request(url, opts) {
   const res = await fetch(`${BASE}${url}`, opts);
@@ -20,8 +20,8 @@ export const api = {
 
   getImageData: (id, type) => request(`/images/${id}/data?type=${type}`),
 
-  getMaterials: (category) =>
-    request(`/materials${category ? `?category=${category}` : ''}`),
+  getMaterials: (category, page = 1, limit = 20) =>
+    request(`/materials${category ? `?category=${category}&` : '?'}page=${page}&limit=${limit}`),
 
   generate: (body) =>
     request('/generate', {
@@ -42,11 +42,11 @@ export const api = {
     }),
 };
 
-// Supported resolutions
+// Supported resolutions (prices converted at 1:7 USD/CNY rate)
 export const RESOLUTIONS = [
-  { value: '1k', label: '1K', price: '¥0.04' },
-  { value: '2k', label: '2K', price: '¥0.08' },
-  { value: '4k', label: '4K', price: '¥0.13' },
+  { value: '1k', label: '1K', price: '¥0.0420' },
+  { value: '2k', label: '2K', price: '¥0.0840' },
+  { value: '4k', label: '4K', price: '¥0.1260' },
 ];
 
 // Supported sizes
