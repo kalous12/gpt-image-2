@@ -1,0 +1,84 @@
+{
+  "exchangeRate": 7,
+  "models": {
+    "gpt-image-2": {
+      "billingType": "resolution",
+      "discountRate": 0.8,
+      "prices": {
+        "1K": { "usd": 0.006, "cny": 0.042 },
+        "2K": { "usd": 0.012, "cny": 0.084 },
+        "4K": { "usd": 0.018, "cny": 0.126 }
+      }
+    },
+    "gpt-image-2-official": {
+      "billingType": "size_quality",
+      "discountRate": 0.8,
+      "supportedQualities": ["auto", "low", "medium", "high"],
+      "supportedSizes": [
+        "1:1", "3:2", "2:3", "4:3", "3:4", "5:4", "4:5",
+        "16:9", "9:16", "2:1", "1:2", "21:9", "9:21"
+      ],
+      "size4K": ["16:9", "9:16", "2:1", "1:2", "21:9", "9:21"],
+      "prices": {
+        "1:1": {
+          "1K": { "low": 0.00488, "medium": 0.04232, "high": 0.16872, "usdOfficial": 0.0061 },
+          "2K": { "low": 0.00968, "medium": 0.08576, "high": 0.34264, "usdOfficial": 0.0121 }
+        },
+        "16:9": {
+          "1K": { "low": 0.00304, "medium": 0.02600, "high": 0.10360, "usdOfficial": 0.0038 },
+          "2K": { "low": 0.00392, "medium": 0.03408, "high": 0.13576, "usdOfficial": 0.0049 },
+          "4K": { "low": 0.00904, "medium": 0.08024, "high": 0.32032, "usdOfficial": 0.0113 }
+        },
+        "9:16": {
+          "1K": { "low": 0.00304, "medium": 0.02600, "high": 0.10360, "usdOfficial": 0.0038 },
+          "2K": { "low": 0.00392, "medium": 0.03408, "high": 0.13576, "usdOfficial": 0.0049 },
+          "4K": { "low": 0.00904, "medium": 0.08024, "high": 0.32032, "usdOfficial": 0.0113 }
+        },
+        "3:2": {
+          "1K": { "low": 0.00392, "medium": 0.03304, "high": 0.13184, "usdOfficial": 0.0049 },
+          "2K": { "low": 0.00520, "medium": 0.04424, "high": 0.17656, "usdOfficial": 0.0065 }
+        },
+        "2:3": {
+          "1K": { "low": 0.00392, "medium": 0.03304, "high": 0.13184, "usdOfficial": 0.0049 },
+          "2K": { "low": 0.00520, "medium": 0.04424, "high": 0.17656, "usdOfficial": 0.0065 }
+        },
+        "4:3": {
+          "1K": { "low": 0.00336, "medium": 0.02904, "high": 0.11568, "usdOfficial": 0.0042 },
+          "2K": { "low": 0.00608, "medium": 0.05352, "high": 0.21352, "usdOfficial": 0.0076 }
+        },
+        "3:4": {
+          "1K": { "low": 0.00336, "medium": 0.02904, "high": 0.11568, "usdOfficial": 0.0042 },
+          "2K": { "low": 0.00608, "medium": 0.05352, "high": 0.21352, "usdOfficial": 0.0076 }
+        },
+        "5:4": {
+          "1K": { "low": 0.00432, "medium": 0.03640, "high": 0.14696, "usdOfficial": 0.0054 },
+          "2K": { "low": 0.00920, "medium": 0.07944, "high": 0.32136, "usdOfficial": 0.0115 }
+        },
+        "4:5": {
+          "1K": { "low": 0.00432, "medium": 0.03640, "high": 0.14696, "usdOfficial": 0.0054 },
+          "2K": { "low": 0.00920, "medium": 0.07944, "high": 0.32136, "usdOfficial": 0.0115 }
+        },
+        "2:1": {
+          "1K": { "low": 0.00328, "medium": 0.02848, "high": 0.11344, "usdOfficial": 0.0041 },
+          "2K": { "low": 0.00448, "medium": 0.03896, "high": 0.15536, "usdOfficial": 0.0056 },
+          "4K": { "low": 0.00736, "medium": 0.06496, "high": 0.25928, "usdOfficial": 0.0092 }
+        },
+        "1:2": {
+          "1K": { "low": 0.00328, "medium": 0.02848, "high": 0.11344, "usdOfficial": 0.0041 },
+          "2K": { "low": 0.00448, "medium": 0.03896, "high": 0.15536, "usdOfficial": 0.0056 },
+          "4K": { "low": 0.00736, "medium": 0.06496, "high": 0.25928, "usdOfficial": 0.0092 }
+        },
+        "21:9": {
+          "1K": { "low": 0.00264, "medium": 0.02280, "high": 0.08848, "usdOfficial": 0.0033 },
+          "2K": { "low": 0.00360, "medium": 0.03096, "high": 0.12056, "usdOfficial": 0.0045 },
+          "4K": { "low": 0.00576, "medium": 0.05048, "high": 0.19688, "usdOfficial": 0.0072 }
+        },
+        "9:21": {
+          "1K": { "low": 0.00264, "medium": 0.02280, "high": 0.08848, "usdOfficial": 0.0033 },
+          "2K": { "low": 0.00360, "medium": 0.03096, "high": 0.12056, "usdOfficial": 0.0045 },
+          "4K": { "low": 0.00576, "medium": 0.05048, "high": 0.19688, "usdOfficial": 0.0072 }
+        }
+      }
+    }
+  }
+}

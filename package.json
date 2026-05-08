@@ -1,0 +1,12 @@
+{
+  "name": "gpt-image-2",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
+    "dev:server": "cd server && node --watch index.js",
+    "dev:client": "cd client && npx vite --host"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
