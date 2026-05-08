@@ -20,4 +20,5 @@ app.use('/api/materials', materialsRouter);
 app.use('/api', generateRouter);
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => console.log(`Server running on :${PORT}`));
+const server = app.listen(PORT, () => console.log(`Server running on :${PORT}`));
+server.on('error', (err) => console.error('Server error:', err));
