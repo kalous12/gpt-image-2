@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { ConfigProvider, theme, Segmented, Masonry, Input, Select, Button, Modal, Space, Spin } from 'antd';
+import { ConfigProvider, theme, Segmented, Masonry, Input, Select, Button, Modal, Space, Spin, message } from 'antd';
 import { PlusOutlined, DeleteOutlined, SettingOutlined, EyeOutlined, CopyOutlined, LoadingOutlined, ThunderboltOutlined, PictureOutlined, CloudUploadOutlined, DownloadOutlined } from '@ant-design/icons';
-import { usePolling } from './hooks/usePolling.js';
-import { api, RESOLUTIONS, SIZES, SIZE_4K } from './api.js';
+import { useMultiPolling } from './hooks/usePolling.js';
+import { api, ApiError, RESOLUTIONS, SIZES, SIZE_4K } from './api.js';
 
 const { TextArea } = Input;
 const { darkAlgorithm } = theme;
@@ -103,9 +103,56 @@ const TAB_OPTIONS = [
 
 const PAGE_SIZE = 20;
 
+// 统一的数据加载状态管理
+function useDataLoader() {
+  const [state, setState] = useState({
+    images: [],
+    loading: false,
+    error: null,
+  });
+  const cacheRef = useRef({ user: null, generated: null, material: null });
+
+  const load = useCallback(async (tab, forceRefresh = false) => {
+    // 使用缓存
+    if (!forceRefresh && cacheRef.current[tab]) {
+      setState(prev => ({ ...prev, images: cacheRef.current[tab], loading: false }));
+      return cacheRef.current[tab];
+    }
+
+    setState(prev => ({ ...prev, loading: true, error: null }));
+
+    try {
+      let data;
+      if (tab === 'user') {
+        data = await api.getImages('user');
+      } else if (tab === 'generated') {
+        data = await api.getImages('generated');
+      } else {
+        const result = await api.getMaterials(null, 1, PAGE_SIZE);
+        data = result;
+      }
+      cacheRef.current[tab] = data;
+      setState({ images: data, loading: false, error: null });
+      return data;
+    } catch (err) {
+      setState(prev => ({ ...prev, loading: false, error: err.message }));
+      throw err;
+    }
+  }, []);
+
+  const invalidateCache = useCallback((tab) => {
+    cacheRef.current[tab] = null;
+  }, []);
+
+  const setImages = useCallback((images) => {
+    setState(prev => ({ ...prev, images }));
+  }, []);
+
+  return { ...state, load, invalidateCache, setImages, cacheRef };
+}
+
 export default function App() {
   const [tab, setTab] = useState('user');
-  const [images, setImages] = useState([]);
   const [selected, setSelected] = useState([]);
   const [prompt, setPrompt] = useState('');
   const [resolution, setResolution] = useState('1k');
@@ -115,60 +162,98 @@ export default function App() {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewImage, setPreviewImage] = useState('');
   const [previewData, setPreviewData] = useState(null);
-  const [taskId, setTaskId] = useState(null);
-  const [generating, setGenerating] = useState(false);
 
+  // 统一的数据加载
+  const { images, loading, load, invalidateCache, setImages, cacheRef } = useDataLoader();
+
+  // 任务状态
+  const [activeTasks, setActiveTasks] = useState([]);
+
+  // 素材分页状态
   const [materialPage, setMaterialPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const loaderRef = useRef(null);
   const loadingRef = useRef(false);
 
-  const loadUserOrGenerated = useCallback(async () => {
-    if (tab === 'user') {
-      const data = await api.getImages('user');
-      const withData = await Promise.all(
-        data.map(async (img) => {
-          const d = await api.getImageData(img.id, 'user');
-          return { ...img, data: d.data };
-        })
-      );
-      setImages(withData);
-    } else if (tab === 'generated') {
-      const data = await api.getImages('generated');
-      setImages(data);
-    }
-  }, [tab]);
+  // 页面加载时恢复正在进行的任务
+  useEffect(() => {
+    const restoreActiveTasks = async () => {
+      try {
+        const tasks = await api.getActiveTasks();
+        if (tasks && tasks.length > 0) {
+          setActiveTasks(tasks.map(t => ({
+            taskId: t.task_id,
+            status: 'generating'
+          })));
+        }
+      } catch (err) {
+        console.warn('Failed to restore active tasks:', err.message);
+      }
+    };
+    restoreActiveTasks();
+  }, []);
+
+  // 是否有正在生成的任务
+  const generating = activeTasks.some(t => t.status === 'generating');
+
+  const loadGenerated = useCallback(async () => {
+    return load('generated', true);
+  }, [load]);
+
+  const loadUserOrGenerated = useCallback(async (forceRefresh = false) => {
+    if (tab === 'material') return;
+    return load(tab, forceRefresh);
+  }, [tab, load]);
 
   const loadMaterialsFirst = useCallback(async () => {
+    if (cacheRef.current.material) {
+      setImages(cacheRef.current.material);
+      setHasMore(false);
+      return;
+    }
+
     if (loadingRef.current) return;
     loadingRef.current = true;
-    const data = await api.getMaterials(null, 1, PAGE_SIZE);
-    setImages(data.items);
-    setHasMore(data.hasMore);
-    setMaterialPage(2);
-    loadingRef.current = false;
-  }, []);
+
+    try {
+      const data = await api.getMaterials(null, 1, PAGE_SIZE);
+      setImages(data.items);
+      setHasMore(data.hasMore);
+      setMaterialPage(2);
+      cacheRef.current.material = data.items;
+    } catch (err) {
+      message.error('加载素材失败: ' + err.message);
+    } finally {
+      loadingRef.current = false;
+    }
+  }, [setImages]);
 
   const loadMoreMaterials = useCallback(async () => {
     if (loadingMore || !hasMore || loadingRef.current) return;
     loadingRef.current = true;
     setLoadingMore(true);
-    const currentPage = materialPage;
-    const data = await api.getMaterials(null, currentPage, PAGE_SIZE);
-    setImages(prev => {
-      const existingIds = new Set(prev.map(i => i.id));
-      const newItems = data.items.filter(i => !existingIds.has(i.id));
-      return [...prev, ...newItems];
-    });
-    setHasMore(data.hasMore);
-    setMaterialPage(currentPage + 1);
-    setLoadingMore(false);
-    loadingRef.current = false;
-  }, [materialPage, hasMore, loadingMore]);
+
+    try {
+      const currentPage = materialPage;
+      const data = await api.getMaterials(null, currentPage, PAGE_SIZE);
+      setImages(prev => {
+        const existingIds = new Set(prev.map(i => i.id));
+        const newItems = data.items.filter(i => !existingIds.has(i.id));
+        return [...prev, ...newItems];
+      });
+      setHasMore(data.hasMore);
+      setMaterialPage(currentPage + 1);
+    } catch (err) {
+      message.error('加载更多失败: ' + err.message);
+    } finally {
+      setLoadingMore(false);
+      loadingRef.current = false;
+    }
+  }, [materialPage, hasMore, loadingMore, setImages]);
 
   useEffect(() => {
-    setImages([]);
+    // 切换 tab 时不再清空 images，直接加载
     setMaterialPage(1);
     setHasMore(true);
     setLoadingMore(false);
@@ -197,11 +282,14 @@ export default function App() {
   }, [tab, hasMore, loadingMore, loadMoreMaterials]);
 
   useEffect(() => {
-    if (tab === 'generated' && taskId) {
-      const interval = setInterval(() => loadUserOrGenerated(), 5000);
+    // 有生成中的任务时定期刷新数据
+    if (tab === 'generated' && generating) {
+      const interval = setInterval(() => {
+        loadUserOrGenerated(true);  // 强制刷新
+      }, 5000);
       return () => clearInterval(interval);
     }
-  }, [tab, taskId, loadUserOrGenerated]);
+  }, [tab, generating, loadUserOrGenerated]);
 
   const handleUpload = async () => {
     const input = document.createElement('input');
@@ -212,8 +300,14 @@ export default function App() {
       if (!file) return;
       const reader = new FileReader();
       reader.onload = async () => {
-        await api.uploadImage(reader.result, file.name);
-        loadUserOrGenerated();
+        try {
+          await api.uploadImage(reader.result, file.name);
+          invalidateCache('user');
+          load('user', true);
+          message.success('上传成功');
+        } catch (err) {
+          message.error('上传失败: ' + err.message);
+        }
       };
       reader.readAsDataURL(file);
     };
@@ -222,8 +316,14 @@ export default function App() {
 
   const handleGenerate = async () => {
     if (!prompt.trim() || generating) return;
-    setGenerating(true);
-    const imageUrls = selected.map(s => s.data || s.filename).filter(Boolean);
+
+    // 构建参考图列表 - 直接传递文件路径，后端处理
+    const imageUrls = selected.map(s => {
+      if (s.data) return s.data;
+      if (s.file_path) return s.file_path;
+      if (s.filename) return s.filename;
+      return null;
+    }).filter(Boolean);
 
     try {
       const result = await api.generate({
@@ -233,31 +333,73 @@ export default function App() {
         n: count,
         image_urls: imageUrls.length > 0 ? imageUrls : undefined,
       });
+
       if (result.taskId) {
-        setTaskId(result.taskId);
+        setActiveTasks(prev => [...prev, { taskId: result.taskId, status: 'generating' }]);
         setTab('generated');
         setSelected([]);
-        loadUserOrGenerated();
+
+        // 显示提示
+        if (result.cached) {
+          message.info('使用缓存结果');
+        } else if (result.duplicate) {
+          message.info('已有相同请求正在生成中');
+        }
+
+        loadGenerated();
       } else {
-        Modal.error({ title: '生成失败', content: result.error || '请检查 API Key 是否正确' });
-        setGenerating(false);
+        const errorMsg = getErrorMessage(result);
+        Modal.error({ title: '生成失败', content: errorMsg });
       }
     } catch (err) {
       Modal.error({ title: '请求失败', content: err.message });
-      setGenerating(false);
     }
   };
 
-  const handleTaskComplete = (data) => {
-    setTaskId(null);
-    setGenerating(false);
-    if (data) loadUserOrGenerated();
+  const getErrorMessage = (result) => {
+    if (result.error) return result.error;
+    switch (result.code) {
+      case 401: return 'API Key 无效，请检查设置';
+      case 402: return '账户余额不足，请充值后再试';
+      case 429: return '请求过于频繁，请稍后再试';
+      case 503: return '服务暂时不可用，请稍后再试';
+      default: return '请检查 API Key 是否正确';
+    }
   };
 
-  usePolling(taskId, handleTaskComplete);
+  // 任务完成回调
+  const handleTaskComplete = useCallback((taskId, data, errorMessage) => {
+    setActiveTasks(prev => {
+      const updated = prev.map(t => {
+        if (t.taskId === taskId) {
+          return { ...t, status: data ? 'completed' : 'failed' };
+        }
+        return t;
+      });
+      return updated.filter(t => t.status === 'generating');
+    });
+
+    if (data) {
+      invalidateCache('generated');
+      load('generated', true);
+    } else if (errorMessage) {
+      Modal.error({ title: '生成失败', content: errorMessage });
+    }
+  }, [invalidateCache, load]);
+
+  // 使用多任务轮询
+  useMultiPolling(activeTasks, handleTaskComplete);
 
   const getImgSrc = (item) => {
+    // 优先使用 file_path（新的文件存储方式）
+    if (item.file_path) {
+      // 如果是绝对路径，提取文件名并构建 URL
+      const filename = item.file_path.split('/').pop();
+      return `http://${window.location.hostname}:3001/uploads/${filename}`;
+    }
+    // 兼容旧的 data 字段
     if (item.data) return item.data;
+    // 兼容旧的 filename 字段
     if (item.filename) return item.filename;
     if (item.image_path) return `http://${window.location.hostname}:3001/${item.image_path}`;
     return '';
@@ -321,6 +463,18 @@ export default function App() {
 
     const src = getImgSrc(img);
 
+    // 如果没有图片源，显示占位符
+    if (!src) {
+      return (
+        <div className="image-card image-card-placeholder">
+          <div className="placeholder-content">
+            <PictureOutlined className="placeholder-icon" />
+            <span>图片加载中...</span>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="image-card">
         <img src={src} alt="" className="image-card-img" onClick={() => {
@@ -333,8 +487,14 @@ export default function App() {
         {tab !== 'material' && (
           <button className="delete-btn" onClick={async (e) => {
             e.stopPropagation();
-            await api.deleteImage(img.id, tab === 'user' ? 'user' : 'generated');
-            loadUserOrGenerated();
+            try {
+              await api.deleteImage(img.id, tab === 'user' ? 'user' : 'generated');
+              invalidateCache(tab);
+              load(tab, true);
+              message.success('删除成功');
+            } catch (err) {
+              message.error('删除失败: ' + err.message);
+            }
           }}>
             ×
           </button>
@@ -374,10 +534,10 @@ export default function App() {
               </button>
             )}
 
-            {tab === 'generated' && img.prompt_text && (
+            {tab === 'generated' && img.prompt && (
               <button className="action-btn-vertical" onClick={(e) => {
                 e.stopPropagation();
-                setPrompt(img.prompt_text || img.prompt || '');
+                setPrompt(img.prompt);
               }}>
                 <ThunderboltOutlined />
                 <span>做同款</span>
@@ -465,7 +625,7 @@ export default function App() {
                     const src = getImgSrc(img);
                     return (
                       <div key={i} className="selected-item">
-                        <img src={src} alt="" />
+                        {src ? <img src={src} alt="" /> : <div className="selected-placeholder" />}
                         <button className="selected-remove" onClick={() => setSelected(selected.filter((_, idx) => idx !== i))}>
                           ×
                         </button>
@@ -520,12 +680,12 @@ export default function App() {
                 type="primary"
                 size="large"
                 onClick={handleGenerate}
-                disabled={generating || !prompt.trim()}
+                disabled={!prompt.trim()}
                 loading={generating}
                 className="generate-btn"
                 icon={<ThunderboltOutlined />}
               >
-                {generating ? '创作中' : '开始创作'}
+                {generating ? '创作中...' : '开始创作'}
               </Button>
             </div>
           </div>
@@ -542,9 +702,9 @@ export default function App() {
         >
           <div className="preview-content">
             <img src={previewImage} alt="" className="preview-image" />
-            {previewData?.prompt_text && (
+            {previewData?.prompt && (
               <div className="preview-info">
-                <p>{previewData.prompt_text}</p>
+                <p>{previewData.prompt}</p>
               </div>
             )}
             <button className="preview-close" onClick={() => setPreviewOpen(false)}>
@@ -742,6 +902,26 @@ export default function App() {
           box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
         }
 
+        .image-card-placeholder {
+          aspect-ratio: 1;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+
+        .placeholder-content {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 12px;
+          color: #71717a;
+        }
+
+        .placeholder-icon {
+          font-size: 32px;
+          opacity: 0.5;
+        }
+
         .image-card-img {
           width: 100%;
           display: block;
@@ -917,6 +1097,14 @@ export default function App() {
           object-fit: cover;
           border: 2px solid rgba(59, 130, 246, 0.4);
           transition: border-color 0.2s ease;
+        }
+
+        .selected-placeholder {
+          width: 100%;
+          height: 100%;
+          border-radius: 10px;
+          background: rgba(59, 130, 246, 0.1);
+          border: 2px dashed rgba(59, 130, 246, 0.3);
         }
 
         .selected-item:hover img {
