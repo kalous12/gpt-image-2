@@ -8,32 +8,38 @@ materialsRouter.get('/', (req, res) => {
   const offset = (parseInt(page) - 1) * parseInt(limit);
   const db = getDb();
 
-  let countQuery, dataQuery, params;
+  try {
+    let countResult, rows;
 
-  if (category) {
-    countQuery = 'SELECT COUNT(*) as total FROM materials WHERE category = ?';
-    dataQuery = `SELECT id, category, prompt_text, image_path, author, source_url, created_at
-      FROM materials WHERE category = ?
-      ORDER BY CASE WHEN prompt_text != '' THEN 0 ELSE 1 END, id DESC
-      LIMIT ? OFFSET ?`;
-    params = [category, category, parseInt(limit), offset];
-  } else {
-    countQuery = 'SELECT COUNT(*) as total FROM materials';
-    dataQuery = `SELECT id, category, prompt_text, image_path, author, source_url, created_at
-      FROM materials
-      ORDER BY CASE WHEN prompt_text != '' THEN 0 ELSE 1 END, id DESC
-      LIMIT ? OFFSET ?`;
-    params = [parseInt(limit), offset];
+    if (category) {
+      countResult = db.prepare('SELECT COUNT(*) as total FROM materials WHERE category = ?').get(category);
+      rows = db.prepare(`
+        SELECT id, category, prompt_text, image_path, author, source_url, created_at
+        FROM materials WHERE category = ?
+        ORDER BY CASE WHEN prompt_text != '' THEN 0 ELSE 1 END, id DESC
+        LIMIT ? OFFSET ?
+      `).all(category, parseInt(limit), offset);
+    } else {
+      countResult = db.prepare('SELECT COUNT(*) as total FROM materials').get();
+      rows = db.prepare(`
+        SELECT id, category, prompt_text, image_path, author, source_url, created_at
+        FROM materials
+        ORDER BY CASE WHEN prompt_text != '' THEN 0 ELSE 1 END, id DESC
+        LIMIT ? OFFSET ?
+      `).all(parseInt(limit), offset);
+    }
+
+    const total = countResult?.total || 0;
+
+    res.json({
+      items: rows,
+      total,
+      page: parseInt(page),
+      limit: parseInt(limit),
+      hasMore: offset + rows.length < total,
+    });
+  } catch (err) {
+    console.error('Materials API error:', err);
+    res.status(500).json({ error: err.message });
   }
-
-  const { total } = db.prepare(countQuery).get(category ? [category] : []);
-  const rows = db.prepare(dataQuery).all(...params);
-
-  res.json({
-    items: rows,
-    total,
-    page: parseInt(page),
-    limit: parseInt(limit),
-    hasMore: offset + rows.length < total,
-  });
 });
