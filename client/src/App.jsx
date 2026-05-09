@@ -1,11 +1,58 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { ConfigProvider, theme, Segmented, Masonry, Input, Select, Button, Modal, Space, Spin, message } from 'antd';
-import { PlusOutlined, DeleteOutlined, SettingOutlined, EyeOutlined, CopyOutlined, LoadingOutlined, ThunderboltOutlined, PictureOutlined, CloudUploadOutlined, DownloadOutlined } from '@ant-design/icons';
-import { useMultiPolling } from './hooks/usePolling.js';
-import { api, ApiError, RESOLUTIONS, SIZES, SIZE_4K } from './api.js';
+import { PlusOutlined, DeleteOutlined, SettingOutlined, EyeOutlined, CopyOutlined, LoadingOutlined, ThunderboltOutlined, PictureOutlined, CloudUploadOutlined, DownloadOutlined, UpOutlined, DownOutlined } from '@ant-design/icons';
+import { api, RESOLUTIONS, SIZES, SIZE_4K } from './api.js';
+import './App.css';
 
 const { TextArea } = Input;
 const { darkAlgorithm } = theme;
+
+// 竖向分页器组件
+function VerticalPagination({ current, total, pageSize, onChange }) {
+  const totalPages = Math.ceil(total / pageSize) || 1;
+  const [inputValue, setInputValue] = useState(String(current));
+
+  useEffect(() => {
+    setInputValue(String(current));
+  }, [current]);
+
+  const handlePrev = () => {
+    if (current > 1) onChange(current - 1);
+  };
+
+  const handleNext = () => {
+    if (current < totalPages) onChange(current + 1);
+  };
+
+  const handleJump = (e) => {
+    if (e.key === 'Enter') {
+      const page = parseInt(inputValue);
+      if (page >= 1 && page <= totalPages) {
+        onChange(page);
+      } else {
+        setInputValue(String(current));
+      }
+    }
+  };
+
+  return (
+    <div className="vertical-pagination">
+      <button className="pagination-btn" onClick={handlePrev} disabled={current <= 1}>
+        <UpOutlined />
+      </button>
+      <input
+        className="pagination-input"
+        value={inputValue}
+        onChange={(e) => setInputValue(e.target.value.replace(/\D/g, ''))}
+        onKeyDown={handleJump}
+      />
+      <span className="pagination-total">/ {totalPages}</span>
+      <button className="pagination-btn" onClick={handleNext} disabled={current >= totalPages}>
+        <DownOutlined />
+      </button>
+    </div>
+  );
+}
 
 // 可拖拽调整高度的输入框组件
 function ResizableTextArea({ value, onChange, placeholder, minHeight = 40, maxHeight = 200 }) {
@@ -103,52 +150,115 @@ const TAB_OPTIONS = [
 
 const PAGE_SIZE = 20;
 
-// 统一的数据加载状态管理
+// 统一的数据加载状态管理，支持多页缓存和无限滚动
 function useDataLoader() {
   const [state, setState] = useState({
-    images: [],
+    pages: {},        // 缓存各页数据 { pageNum: [items] }
+    loadedPages: [],  // 已加载的页码列表
     loading: false,
     error: null,
+    total: 0,
   });
-  const cacheRef = useRef({ user: null, generated: null, material: null });
 
-  const load = useCallback(async (tab, forceRefresh = false) => {
-    // 使用缓存
-    if (!forceRefresh && cacheRef.current[tab]) {
-      setState(prev => ({ ...prev, images: cacheRef.current[tab], loading: false }));
-      return cacheRef.current[tab];
+  // 使用 ref 跟踪已加载页面，避免闭包问题
+  const loadedPagesRef = useRef(new Set());
+  const loadingPagesRef = useRef(new Set()); // 正在加载中的页面
+
+  const load = useCallback(async (tab, page = 1, limit = PAGE_SIZE) => {
+    // 检查是否已加载或正在加载
+    if (loadedPagesRef.current.has(page) || loadingPagesRef.current.has(page)) {
+      return;
     }
 
+    loadingPagesRef.current.add(page);
     setState(prev => ({ ...prev, loading: true, error: null }));
 
     try {
       let data;
       if (tab === 'user') {
-        data = await api.getImages('user');
+        data = await api.getImages('user', page, limit);
       } else if (tab === 'generated') {
-        data = await api.getImages('generated');
+        data = await api.getImages('generated', page, limit);
       } else {
-        const result = await api.getMaterials(null, 1, PAGE_SIZE);
-        data = result;
+        data = await api.getMaterials(null, page, limit);
       }
-      cacheRef.current[tab] = data;
-      setState({ images: data, loading: false, error: null });
+
+      loadedPagesRef.current.add(page);
+
+      setState(prev => ({
+        ...prev,
+        pages: { ...prev.pages, [page]: data.items || [] },
+        loadedPages: [...new Set([...prev.loadedPages, page])].sort((a, b) => a - b),
+        loading: false,
+        error: null,
+        total: data.total || 0,
+      }));
       return data;
     } catch (err) {
       setState(prev => ({ ...prev, loading: false, error: err.message }));
       throw err;
+    } finally {
+      loadingPagesRef.current.delete(page);
     }
   }, []);
 
-  const invalidateCache = useCallback((tab) => {
-    cacheRef.current[tab] = null;
+  // 预加载某一页（不改变当前页）
+  const preload = useCallback(async (tab, page, limit = PAGE_SIZE) => {
+    // 使用 ref 检查，避免闭包问题
+    if (loadedPagesRef.current.has(page) || loadingPagesRef.current.has(page)) return;
+
+    loadingPagesRef.current.add(page);
+
+    try {
+      let data;
+      if (tab === 'user') {
+        data = await api.getImages('user', page, limit);
+      } else if (tab === 'generated') {
+        data = await api.getImages('generated', page, limit);
+      } else {
+        data = await api.getMaterials(null, page, limit);
+      }
+
+      loadedPagesRef.current.add(page);
+
+      setState(prev => ({
+        ...prev,
+        pages: { ...prev.pages, [page]: data.items || [] },
+        loadedPages: [...new Set([...prev.loadedPages, page])].sort((a, b) => a - b),
+        total: data.total || prev.total,
+      }));
+    } catch (err) {
+      console.warn('Preload failed:', err.message);
+    } finally {
+      loadingPagesRef.current.delete(page);
+    }
   }, []);
 
-  const setImages = useCallback((images) => {
-    setState(prev => ({ ...prev, images }));
+  // 清空缓存
+  const clearCache = useCallback(() => {
+    loadedPagesRef.current.clear();
+    loadingPagesRef.current.clear();
+    setState({ pages: {}, loadedPages: [], total: 0, loading: false, error: null });
   }, []);
 
-  return { ...state, load, invalidateCache, setImages, cacheRef };
+  // 获取所有已加载页的数据（按页码顺序合并）
+  const getAllImages = useCallback(() => {
+    const result = [];
+    for (const page of state.loadedPages) {
+      if (state.pages[page]) {
+        result.push(...state.pages[page]);
+      }
+    }
+    return result;
+  }, [state.pages, state.loadedPages]);
+
+  return {
+    ...state,
+    getAllImages,
+    load,
+    preload,
+    clearCache,
+  };
 }
 
 export default function App() {
@@ -162,134 +272,191 @@ export default function App() {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewImage, setPreviewImage] = useState('');
   const [previewData, setPreviewData] = useState(null);
+  const [isDragging, setIsDragging] = useState(false);
 
   // 统一的数据加载
-  const { images, loading, load, invalidateCache, setImages, cacheRef } = useDataLoader();
+  const { getAllImages, loadedPages, loading, load, clearCache, total } = useDataLoader();
 
-  // 任务状态
-  const [activeTasks, setActiveTasks] = useState([]);
+  // 分页状态
+  const [currentPage, setCurrentPage] = useState(1);
+  const totalPages = Math.ceil(total / PAGE_SIZE) || 0;
 
-  // 素材分页状态
-  const [materialPage, setMaterialPage] = useState(1);
-  const [hasMore, setHasMore] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const loaderRef = useRef(null);
-  const loadingRef = useRef(false);
+  // 获取所有已加载的图片
+  const images = getAllImages();
 
-  // 页面加载时恢复正在进行的任务
-  useEffect(() => {
-    const restoreActiveTasks = async () => {
-      try {
-        const tasks = await api.getActiveTasks();
-        if (tasks && tasks.length > 0) {
-          setActiveTasks(tasks.map(t => ({
-            taskId: t.task_id,
-            status: 'generating'
-          })));
-        }
-      } catch (err) {
-        console.warn('Failed to restore active tasks:', err.message);
-      }
-    };
-    restoreActiveTasks();
-  }, []);
-
-  // 是否有正在生成的任务
-  const generating = activeTasks.some(t => t.status === 'generating');
-
-  const loadGenerated = useCallback(async () => {
-    return load('generated', true);
-  }, [load]);
-
-  const loadUserOrGenerated = useCallback(async (forceRefresh = false) => {
-    if (tab === 'material') return;
-    return load(tab, forceRefresh);
-  }, [tab, load]);
-
-  const loadMaterialsFirst = useCallback(async () => {
-    if (cacheRef.current.material) {
-      setImages(cacheRef.current.material);
-      setHasMore(false);
-      return;
-    }
-
-    if (loadingRef.current) return;
-    loadingRef.current = true;
-
-    try {
-      const data = await api.getMaterials(null, 1, PAGE_SIZE);
-      setImages(data.items);
-      setHasMore(data.hasMore);
-      setMaterialPage(2);
-      cacheRef.current.material = data.items;
-    } catch (err) {
-      message.error('加载素材失败: ' + err.message);
-    } finally {
-      loadingRef.current = false;
-    }
-  }, [setImages]);
-
-  const loadMoreMaterials = useCallback(async () => {
-    if (loadingMore || !hasMore || loadingRef.current) return;
-    loadingRef.current = true;
-    setLoadingMore(true);
-
-    try {
-      const currentPage = materialPage;
-      const data = await api.getMaterials(null, currentPage, PAGE_SIZE);
-      setImages(prev => {
-        const existingIds = new Set(prev.map(i => i.id));
-        const newItems = data.items.filter(i => !existingIds.has(i.id));
-        return [...prev, ...newItems];
-      });
-      setHasMore(data.hasMore);
-      setMaterialPage(currentPage + 1);
-    } catch (err) {
-      message.error('加载更多失败: ' + err.message);
-    } finally {
-      setLoadingMore(false);
-      loadingRef.current = false;
-    }
-  }, [materialPage, hasMore, loadingMore, setImages]);
-
-  useEffect(() => {
-    // 切换 tab 时不再清空 images，直接加载
-    setMaterialPage(1);
-    setHasMore(true);
-    setLoadingMore(false);
-    loadingRef.current = false;
-    if (tab === 'material') {
-      loadMaterialsFirst();
-    } else {
-      loadUserOrGenerated();
+  // 拖拽上传处理
+  const handleDragEnter = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (tab === 'user') {
+      setIsDragging(true);
     }
   }, [tab]);
 
-  useEffect(() => {
-    if (tab !== 'material' || !hasMore || loadingMore) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0].isIntersecting && !loadingRef.current) {
-          loadMoreMaterials();
+  const handleDragLeave = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  }, []);
+
+  const handleDragOver = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
+  const handleDrop = useCallback(async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+
+    if (tab !== 'user') return;
+
+    const files = e.dataTransfer?.files;
+    if (!files || files.length === 0) return;
+
+    // 保存当前位置
+    const savedPage = currentPage;
+
+    for (const file of files) {
+      if (!file.type.startsWith('image/')) continue;
+
+      const reader = new FileReader();
+      reader.onload = async () => {
+        try {
+          await api.uploadImage(reader.result, file.name);
+          // 重新加载当前页
+          load('user', savedPage);
+          message.success(`${file.name} 上传成功`);
+        } catch (err) {
+          message.error(`${file.name} 上传失败: ${err.message}`);
         }
-      },
-      { rootMargin: '200px' }
-    );
-    if (loaderRef.current) {
-      observer.observe(loaderRef.current);
+      };
+      reader.readAsDataURL(file);
     }
-    return () => observer.disconnect();
-  }, [tab, hasMore, loadingMore, loadMoreMaterials]);
+  }, [tab, load, currentPage]);
+
+  // 计算当前可视页码（基于已加载的图片数量）
+  const updateCurrentPageFromScroll = useCallback(() => {
+    if (totalPages <= 1 || loadedPages.length === 0) return;
+
+    const { scrollTop, clientHeight } = document.documentElement;
+    // 找到当前可视区域中间位置对应的图片索引
+    const viewportMiddle = scrollTop + clientHeight / 2;
+
+    // 获取所有图片元素
+    const imageCards = document.querySelectorAll('.image-card, .upload-card, .generating-card');
+    if (imageCards.length === 0) return;
+
+    // 找到最接近视口中间的图片
+    let closestIndex = 0;
+    let minDistance = Infinity;
+    imageCards.forEach((card, index) => {
+      const rect = card.getBoundingClientRect();
+      const cardMiddle = rect.top + rect.height / 2;
+      const distance = Math.abs(cardMiddle - clientHeight / 2);
+      if (distance < minDistance) {
+        minDistance = distance;
+        closestIndex = index;
+      }
+    });
+
+    // 根据图片索引计算页码
+    const imageIndex = closestIndex + 1; // 1-based
+    const newPage = Math.ceil(imageIndex / PAGE_SIZE);
+    const clampedPage = Math.max(1, Math.min(totalPages, newPage));
+
+    if (clampedPage !== currentPage) {
+      setCurrentPage(clampedPage);
+    }
+  }, [totalPages, loadedPages.length, currentPage]);
+
+  // 是否有正在生成的任务（从数据库列表判断）
+  const generating = images.some(i => i.status === 'generating');
+
+  const loadGenerated = useCallback(async (page = 1) => {
+    return load('generated', page);
+  }, [load]);
+
+  const showPagination = totalPages > 1;
+
+  const handlePageChange = useCallback(async (page) => {
+    setCurrentPage(page);
+
+    // 计算目标图片索引
+    const targetIndex = (page - 1) * PAGE_SIZE;
+    const imageCards = document.querySelectorAll('.image-card, .upload-card, .generating-card');
+
+    // 如果目标图片还没加载，先加载目标页及相邻页
+    if (!loadedPages.includes(page)) {
+      await load(tab, page);
+      if (page > 1) load(tab, page - 1);
+      if (page < totalPages) load(tab, page + 1);
+
+      // 等待渲染完成后滚动
+      setTimeout(() => {
+        const newCards = document.querySelectorAll('.image-card, .upload-card, .generating-card');
+        if (newCards[targetIndex]) {
+          newCards[targetIndex].scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }, 100);
+    } else if (imageCards[targetIndex]) {
+      imageCards[targetIndex].scrollIntoView({ behavior: 'smooth', block: 'center' });
+    } else if (imageCards.length > 0) {
+      // 滚动到最后一个已加载的图片
+      imageCards[imageCards.length - 1].scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [tab, loadedPages, load, totalPages]);
+
+  // 滚动监听：更新当前页码 + 预加载后续页
+  useEffect(() => {
+    if (totalPages <= 1) return;
+
+    let loadingPages = new Set(); // 防止重复加载
+
+    const handleScroll = () => {
+      updateCurrentPageFromScroll();
+
+      // 预加载：当前页 + 2 页
+      const lastLoadedPage = loadedPages[loadedPages.length - 1] || 0;
+      const needLoadUpTo = currentPage + 2;
+
+      // 只加载未缓存且未在加载中的页
+      for (let page = lastLoadedPage + 1; page <= needLoadUpTo && page <= totalPages; page++) {
+        if (!loadingPages.has(page)) {
+          loadingPages.add(page);
+          load(tab, page).finally(() => {
+            loadingPages.delete(page);
+          });
+        }
+      }
+    };
+
+    window.addEventListener('scroll', handleScroll);
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, [tab, totalPages, loadedPages, currentPage, load, updateCurrentPageFromScroll]);
+
+  // 初始加载
+  useEffect(() => {
+    setCurrentPage(1);
+    clearCache();
+    // 初始加载前3页
+    load(tab, 1);
+    load(tab, 2);
+    load(tab, 3);
+  }, [tab, load, clearCache]);
 
   useEffect(() => {
     // 有生成中的任务时定期刷新数据
     if (tab === 'generated' && generating) {
       const interval = setInterval(() => {
-        loadUserOrGenerated(true);  // 强制刷新
+        // 刷新所有已加载的页面，保持当前位置
+        for (const page of loadedPages) {
+          load('generated', page);
+        }
       }, 5000);
       return () => clearInterval(interval);
     }
-  }, [tab, generating, loadUserOrGenerated]);
+  }, [tab, generating, load, loadedPages]);
 
   const handleUpload = async () => {
     const input = document.createElement('input');
@@ -302,8 +469,8 @@ export default function App() {
       reader.onload = async () => {
         try {
           await api.uploadImage(reader.result, file.name);
-          invalidateCache('user');
-          load('user', true);
+          // 重新加载当前页，保持位置
+          load('user', currentPage);
           message.success('上传成功');
         } catch (err) {
           message.error('上传失败: ' + err.message);
@@ -335,7 +502,6 @@ export default function App() {
       });
 
       if (result.taskId) {
-        setActiveTasks(prev => [...prev, { taskId: result.taskId, status: 'generating' }]);
         setTab('generated');
         setSelected([]);
 
@@ -346,7 +512,8 @@ export default function App() {
           message.info('已有相同请求正在生成中');
         }
 
-        loadGenerated();
+        setCurrentPage(1);
+        loadGenerated(1);
       } else {
         const errorMsg = getErrorMessage(result);
         Modal.error({ title: '生成失败', content: errorMsg });
@@ -367,41 +534,14 @@ export default function App() {
     }
   };
 
-  // 任务完成回调
-  const handleTaskComplete = useCallback((taskId, data, errorMessage) => {
-    setActiveTasks(prev => {
-      const updated = prev.map(t => {
-        if (t.taskId === taskId) {
-          return { ...t, status: data ? 'completed' : 'failed' };
-        }
-        return t;
-      });
-      return updated.filter(t => t.status === 'generating');
-    });
-
-    if (data) {
-      invalidateCache('generated');
-      load('generated', true);
-    } else if (errorMessage) {
-      Modal.error({ title: '生成失败', content: errorMessage });
-    }
-  }, [invalidateCache, load]);
-
-  // 使用多任务轮询
-  useMultiPolling(activeTasks, handleTaskComplete);
-
   const getImgSrc = (item) => {
-    // 优先使用 file_path（新的文件存储方式）
-    if (item.file_path) {
-      // 如果是绝对路径，提取文件名并构建 URL
-      const filename = item.file_path.split('/').pop();
-      return `http://${window.location.hostname}:3001/uploads/${filename}`;
-    }
+    // file_path 现在已经是可直接访问的相对路径（如 /uploads/xxx.png）
+    if (item.file_path) return item.file_path;
     // 兼容旧的 data 字段
     if (item.data) return item.data;
     // 兼容旧的 filename 字段
     if (item.filename) return item.filename;
-    if (item.image_path) return `http://${window.location.hostname}:3001/${item.image_path}`;
+    if (item.image_path) return item.image_path;
     return '';
   };
 
@@ -489,8 +629,11 @@ export default function App() {
             e.stopPropagation();
             try {
               await api.deleteImage(img.id, tab === 'user' ? 'user' : 'generated');
-              invalidateCache(tab);
-              load(tab, true);
+              // 清空缓存并重新加载当前页及相邻页
+              clearCache();
+              load(tab, Math.max(1, currentPage - 1));
+              load(tab, currentPage);
+              if (currentPage < totalPages) load(tab, currentPage + 1);
               message.success('删除成功');
             } catch (err) {
               message.error('删除失败: ' + err.message);
@@ -566,8 +709,24 @@ export default function App() {
 
   return (
     <ConfigProvider theme={blueTheme}>
-      <div className="app-container">
+      <div
+        className="app-container"
+        onDragEnter={handleDragEnter}
+        onDragLeave={handleDragLeave}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+      >
         <div className="ambient-bg" />
+
+        {/* 拖拽上传提示 */}
+        {isDragging && (
+          <div className="drag-overlay">
+            <div className="drag-content">
+              <CloudUploadOutlined className="drag-icon" />
+              <span className="drag-text">释放以上传图片</span>
+            </div>
+          </div>
+        )}
 
         <header className="app-header">
           <div className="header-content">
@@ -603,10 +762,13 @@ export default function App() {
             itemRender={renderMasonryItem}
           />
 
-          {tab === 'material' && hasMore && (
-            <div ref={loaderRef} className="loader">
-              {loadingMore && <Spin indicator={<LoadingOutlined spin style={{ color: '#3b82f6' }} />} />}
-            </div>
+          {showPagination && (
+            <VerticalPagination
+              current={currentPage}
+              total={total}
+              pageSize={PAGE_SIZE}
+              onChange={handlePageChange}
+            />
           )}
         </main>
 
@@ -641,8 +803,8 @@ export default function App() {
                 placeholder="描述你想要生成的图片..."
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
-                minHeight={40}
-                maxHeight={200}
+                minHeight={120}
+                maxHeight={400}
               />
             </div>
 
@@ -671,7 +833,7 @@ export default function App() {
                 <Select
                   value={count}
                   onChange={setCount}
-                  options={Array.from({ length: 10 }, (_, i) => ({ value: i + 1, label: `${i + 1}张` }))}
+                  options={Array.from({ length: 4 }, (_, i) => ({ value: i + 1, label: `${i + 1}张` }))}
                   className="count-select"
                 />
               </div>
@@ -732,6 +894,40 @@ export default function App() {
           background: #0a0a0f;
           position: relative;
           overflow-x: hidden;
+        }
+
+        .drag-overlay {
+          position: fixed;
+          inset: 0;
+          background: rgba(59, 130, 246, 0.15);
+          backdrop-filter: blur(4px);
+          z-index: 1000;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          pointer-events: none;
+        }
+
+        .drag-content {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 16px;
+          padding: 48px 64px;
+          background: rgba(20, 20, 30, 0.9);
+          border: 2px dashed #3b82f6;
+          border-radius: 16px;
+        }
+
+        .drag-icon {
+          font-size: 64px;
+          color: #3b82f6;
+        }
+
+        .drag-text {
+          font-size: 18px;
+          color: #e4e4e7;
+          font-weight: 500;
         }
 
         .ambient-bg {
@@ -975,6 +1171,7 @@ export default function App() {
           display: flex;
           align-items: center;
           justify-content: center;
+          padding: 8px;
         }
 
         .image-card:hover .image-card-overlay {
@@ -985,28 +1182,31 @@ export default function App() {
         .overlay-actions {
           display: flex;
           flex-direction: column;
-          gap: 10px;
+          gap: 6px;
+          width: 100%;
+          max-width: 120px;
         }
 
         .action-btn-vertical {
           display: flex;
           align-items: center;
-          gap: 8px;
-          padding: 10px 20px;
-          border-radius: 8px;
+          justify-content: center;
+          gap: 6px;
+          padding: 8px 12px;
+          border-radius: 6px;
           border: none;
           background: rgba(59, 130, 246, 0.9);
           color: #fff;
           cursor: pointer;
-          font-size: 15px;
+          font-size: 13px;
           font-weight: 500;
           transition: all 0.2s ease;
-          min-width: 100px;
+          white-space: nowrap;
         }
 
         .action-btn-vertical:hover {
           background: #2563eb;
-          transform: scale(1.05);
+          transform: scale(1.02);
         }
 
         .action-btn-vertical.download-btn {
@@ -1020,6 +1220,69 @@ export default function App() {
         .loader {
           text-align: center;
           padding: 40px 0;
+        }
+
+        .vertical-pagination {
+          position: fixed;
+          right: 24px;
+          top: 50%;
+          transform: translateY(-50%);
+          z-index: 50;
+          background: rgba(20, 20, 30, 0.9);
+          backdrop-filter: blur(10px);
+          border-radius: 12px;
+          padding: 12px;
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 8px;
+        }
+
+        .pagination-btn {
+          width: 36px;
+          height: 36px;
+          border-radius: 8px;
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          background: rgba(30, 30, 40, 0.8);
+          color: #a1a1aa;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          transition: all 0.2s ease;
+        }
+
+        .pagination-btn:hover:not(:disabled) {
+          color: #3b82f6;
+          border-color: rgba(59, 130, 246, 0.5);
+          background: rgba(59, 130, 246, 0.1);
+        }
+
+        .pagination-btn:disabled {
+          opacity: 0.4;
+          cursor: not-allowed;
+        }
+
+        .pagination-input {
+          width: 48px;
+          height: 32px;
+          text-align: center;
+          background: rgba(30, 30, 40, 0.8);
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          border-radius: 6px;
+          color: #fff;
+          font-size: 14px;
+          outline: none;
+        }
+
+        .pagination-input:focus {
+          border-color: #3b82f6;
+        }
+
+        .pagination-total {
+          color: #71717a;
+          font-size: 12px;
         }
 
         .bottom-panel {

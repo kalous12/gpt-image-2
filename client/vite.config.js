@@ -5,6 +5,10 @@ export default defineConfig({
   plugins: [react()],
   server: {
     host: '0.0.0.0',
+    proxy: {
+      '/uploads': 'http://localhost:3001',
+      '/materials': 'http://localhost:3001',
+    },
   },
   esbuild: {
     jsx: 'automatic',
