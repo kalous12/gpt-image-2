@@ -73,6 +73,8 @@ export function initDb(dbPath) {
   migrateTable();
 
   db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('apikey', '')").run();
+  db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('model', 'gpt-image-2')").run();
+  db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('quality', 'auto')").run();
 }
 
 function migrateTable() {
@@ -100,8 +102,8 @@ export function computeSha256(buffer) {
   return crypto.createHash('sha256').update(buffer).digest('hex');
 }
 
-export function computeRequestHash(prompt, resolution, size, imageUrls) {
-  const data = JSON.stringify({ prompt, resolution, size, imageUrls: (imageUrls || []).sort() });
+export function computeRequestHash(prompt, resolution, size, imageUrls, model, quality) {
+  const data = JSON.stringify({ prompt, resolution, size, imageUrls: (imageUrls || []).sort(), model, quality });
   return crypto.createHash('md5').update(data).digest('hex');
 }
 
