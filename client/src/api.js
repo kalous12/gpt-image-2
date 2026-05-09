@@ -76,6 +76,8 @@ export const api = {
 
   getTask: (id) => request(`/tasks/${id}`),
 
+  cancelTask: (id) => request(`/tasks/${id}/cancel`, { method: 'POST' }),
+
   getActiveTasks: () => request('/active'),
 
   getApiKey: () => request('/settings/apikey'),
