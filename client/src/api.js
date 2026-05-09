@@ -1,4 +1,4 @@
-const BASE = `http://${window.location.hostname}:3001/api`;
+const BASE = `http://${window.location.hostname}:4800/api`;
 const DEFAULT_TIMEOUT = 30000; // 30 seconds
 const LONG_TIMEOUT = 300000;   // 5 minutes for generation
 
@@ -74,7 +74,7 @@ export const api = {
       body: JSON.stringify(body),
     }, LONG_TIMEOUT),
 
-  getTask: (id) => request(`/tasks/${id}`),
+  getTask: (id, force = false) => request(`/tasks/${id}${force ? '?force=true' : ''}`),
 
   cancelTask: (id) => request(`/tasks/${id}/cancel`, { method: 'POST' }),
 
@@ -88,6 +88,26 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ apikey }),
     }),
+
+  getModel: () => request('/settings/model'),
+
+  saveModel: (model) =>
+    request('/settings/model', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model }),
+    }),
+
+  getQuality: () => request('/settings/quality'),
+
+  saveQuality: (quality) =>
+    request('/settings/quality', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ quality }),
+    }),
+
+  getAllSettings: () => request('/settings/all'),
 };
 
 export { ApiError };
@@ -116,3 +136,15 @@ export const SIZES = [
 ];
 
 export const SIZE_4K = ['16:9', '9:16', '2:1', '1:2', '21:9', '9:21'];
+
+export const MODELS = [
+  { value: 'gpt-image-2', label: 'GPT Image 2' },
+  { value: 'gpt-image-2-official', label: 'GPT Image 2 (Official)' },
+];
+
+export const QUALITIES = [
+  { value: 'auto', label: '自动' },
+  { value: 'low', label: '低 (快速)' },
+  { value: 'medium', label: '中等' },
+  { value: 'high', label: '高 (精细)' },
+];

@@ -5,9 +5,10 @@ export default defineConfig({
   plugins: [react()],
   server: {
     host: '0.0.0.0',
+    port: 4801,
     proxy: {
-      '/uploads': 'http://localhost:3001',
-      '/materials': 'http://localhost:3001',
+      '/uploads': 'http://localhost:4800',
+      '/materials': 'http://localhost:4800',
     },
   },
   esbuild: {

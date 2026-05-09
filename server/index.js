@@ -35,7 +35,7 @@ app.use('/api/images', imagesRouter);
 app.use('/api/materials', materialsRouter);
 app.use('/api', generateRouter);
 
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 4800;
 const server = app.listen(PORT, () => {
   console.log(`Server running on :${PORT}`);
   // 启动后端轮询
