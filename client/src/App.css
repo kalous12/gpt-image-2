@@ -212,6 +212,7 @@
 .image-card-placeholder {
   aspect-ratio: 1;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
 }
@@ -227,6 +228,26 @@
 .placeholder-icon {
   font-size: 32px;
   opacity: 0.5;
+}
+
+.placeholder-actions {
+  margin-top: 12px;
+}
+
+.retry-btn {
+  padding: 6px 16px;
+  background: rgba(59, 130, 246, 0.2);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  border-radius: 6px;
+  color: #3b82f6;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.retry-btn:hover {
+  background: rgba(59, 130, 246, 0.3);
+  border-color: rgba(59, 130, 246, 0.5);
 }
 
 .image-card-img {

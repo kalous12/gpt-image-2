@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { ConfigProvider, theme, Segmented, Masonry, Select, Button, Modal, message } from 'antd';
 import { PlusOutlined, SettingOutlined, EyeOutlined, CopyOutlined, ThunderboltOutlined, PictureOutlined, CloudUploadOutlined, DownloadOutlined } from '@ant-design/icons';
-import { api, RESOLUTIONS, SIZES, SIZE_4K } from './api.js';
+import { api, RESOLUTIONS, SIZES, SIZE_4K, MODELS, QUALITIES } from './api.js';
 import { useDataLoader, PAGE_SIZE } from './hooks/useDataLoader.js';
 import { VerticalPagination } from './components/VerticalPagination.jsx';
 import { ResizableTextArea } from './components/ResizableTextArea.jsx';
@@ -56,6 +56,8 @@ export default function App() {
   const [size, setSize] = useState('auto');
   const [count, setCount] = useState(1);
   const [showApiKey, setShowApiKey] = useState(false);
+  const [currentModel, setCurrentModel] = useState('gpt-image-2');
+  const [currentQuality, setCurrentQuality] = useState('auto');
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewImage, setPreviewImage] = useState('');
   const [previewData, setPreviewData] = useState(null);
@@ -208,6 +210,40 @@ export default function App() {
   }, [tab, load, clearCache]);
 
   useEffect(() => {
+    api.getAllSettings().then(r => {
+      setCurrentModel(r.model || 'gpt-image-2');
+      setCurrentQuality(r.quality || 'auto');
+    });
+  }, []);
+
+  const handleModelChange = async (model) => {
+    setCurrentModel(model);
+    try {
+      await api.saveModel(model);
+      // 切换到 official 模型时，设置默认值
+      if (model === 'gpt-image-2-official') {
+        setCurrentQuality('low');
+        setSize('16:9');
+        await api.saveQuality('low');
+      } else {
+        // 非 official 模型，尺寸默认为自动
+        setSize('auto');
+      }
+    } catch (err) {
+      console.error('Failed to save model:', err);
+    }
+  };
+
+  const handleQualityChange = async (quality) => {
+    setCurrentQuality(quality);
+    try {
+      await api.saveQuality(quality);
+    } catch (err) {
+      console.error('Failed to save quality:', err);
+    }
+  };
+
+  useEffect(() => {
     if (tab === 'generated' && generating) {
       const interval = setInterval(() => {
         for (const page of loadedPages) {
@@ -252,13 +288,20 @@ export default function App() {
 
     setSubmitting(true);
     try {
-      const result = await api.generate({
+      const requestBody = {
         prompt: prompt.trim(),
         resolution,
         size,
         n: count,
+        model: currentModel,
         image_urls: imageUrls.length > 0 ? imageUrls : undefined,
-      });
+      };
+
+      if (currentModel === 'gpt-image-2-official') {
+        requestBody.quality = currentQuality;
+      }
+
+      const result = await api.generate(requestBody);
 
       if (result.taskId) {
         message.success('提交成功');
@@ -271,8 +314,10 @@ export default function App() {
           message.info('已有相同请求正在生成中');
         }
 
-        setCurrentPage(1);
-        loadGenerated(1);
+        // 刷新创作库
+        clearCache();
+        load('generated', 1);
+        load('generated', 2);
       } else {
         const errorMsg = getErrorMessage(result);
         Modal.error({ title: '生成失败', content: errorMsg });
@@ -389,8 +434,30 @@ export default function App() {
         <div className="image-card image-card-placeholder">
           <div className="placeholder-content">
             <PictureOutlined className="placeholder-icon" />
-            <span>图片加载中...</span>
+            <span>{img.status === 'failed' ? '生成失败' : '图片加载中...'}</span>
           </div>
+          {tab === 'generated' && img.task_id && (
+            <div className="placeholder-actions">
+              <button className="retry-btn" onClick={async (e) => {
+                e.stopPropagation();
+                try {
+                  const result = await api.getTask(img.task_id, true);
+                  if (result.data?.status === 'completed' && result.data?.filePath) {
+                    refresh('generated', currentPage);
+                    message.success('已获取图片');
+                  } else if (result.data?.status === 'failed') {
+                    message.error('生成失败: ' + (result.data?.error?.message || result.data?.errorMessage || '未知错误'));
+                  } else {
+                    message.info('任务仍在处理中');
+                  }
+                } catch (err) {
+                  message.error('查询失败: ' + err.message);
+                }
+              }}>
+                重新获取
+              </button>
+            </div>
+          )}
           {tab !== 'material' && (
             <button className="delete-btn" onClick={async (e) => {
               e.stopPropagation();
@@ -606,6 +673,24 @@ export default function App() {
                 <span className="price-tag">
                   {currentPrice}
                 </span>
+
+                <Select
+                  value={currentModel}
+                  onChange={handleModelChange}
+                  options={MODELS.map(m => ({ value: m.value, label: m.label }))}
+                  className="model-select"
+                  popupMatchSelectWidth={false}
+                />
+
+                {currentModel === 'gpt-image-2-official' && (
+                  <Select
+                    value={currentQuality}
+                    onChange={handleQualityChange}
+                    options={QUALITIES.map(q => ({ value: q.value, label: q.label }))}
+                    className="quality-select"
+                    popupMatchSelectWidth={false}
+                  />
+                )}
 
                 <Select
                   value={resolution}

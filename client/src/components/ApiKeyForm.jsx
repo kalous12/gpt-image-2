@@ -12,29 +12,36 @@ export function ApiKeyForm({ onClose }) {
 
   const handleSave = async () => {
     setSaving(true);
-    await api.saveApiKey(key);
-    setSaving(false);
-    onClose();
+    try {
+      await api.saveApiKey(key);
+      onClose();
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
     <Space direction="vertical" style={{ width: '100%' }} size="large">
-      <Input.Password
-        data-testid="apikey-input"
-        placeholder="输入你的 API Key..."
-        value={key}
-        onChange={(e) => setKey(e.target.value)}
-        style={{ borderRadius: 10 }}
-      />
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12 }}>
+      <div>
+        <label style={{ display: 'block', marginBottom: 8, color: '#a1a1aa', fontSize: 13 }}>API Key</label>
+        <Input.Password
+          data-testid="apikey-input"
+          placeholder="输入你的 API Key..."
+          value={key}
+          onChange={(e) => setKey(e.target.value)}
+          style={{ borderRadius: 10 }}
+        />
+        <p style={{ color: '#71717a', fontSize: 12, margin: '8px 0 0' }}>
+          从 <a href="https://apimart.ai/keys" target="_blank" rel="noreferrer" style={{ color: '#3b82f6' }}>apimart.ai/keys</a> 获取你的 API Key
+        </p>
+      </div>
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12, marginTop: 8 }}>
         <Button data-testid="apikey-cancel" onClick={onClose}>取消</Button>
         <Button data-testid="apikey-save" type="primary" loading={saving} onClick={handleSave}>
           保存
         </Button>
       </div>
-      <p style={{ color: '#71717a', fontSize: 13, margin: 0 }}>
-        从 <a href="https://apimart.ai/keys" target="_blank" rel="noreferrer" style={{ color: '#3b82f6' }}>apimart.ai/keys</a> 获取你的 API Key
-      </p>
     </Space>
   );
 }
