@@ -17,10 +17,16 @@ app.use(express.json({ limit: '50mb' }));
 initDb();
 
 // Serve uploads images as static files
-app.use('/uploads', express.static(getUploadsDir()));
+app.use('/uploads', express.static(getUploadsDir(), {
+  maxAge: '1d',
+  etag: true
+}));
 
 // Serve materials images as static files
-app.use('/materials/images', express.static(path.join(__dirname, '..', 'materials', 'images')));
+app.use('/materials/images', express.static(path.join(__dirname, '..', 'materials', 'images'), {
+  maxAge: '7d',
+  etag: true
+}));
 
 syncMaterials();
 
