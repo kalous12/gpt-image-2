@@ -112,6 +112,45 @@ export const api = {
 
 export { ApiError };
 
+let pricingData = null;
+
+export async function loadPricing() {
+  if (pricingData) return pricingData;
+  try {
+    const res = await fetch('/pricing.json');
+    pricingData = await res.json();
+    return pricingData;
+  } catch {
+    pricingData = null;
+    return null;
+  }
+}
+
+export function getPrice(model, resolution, size, quality) {
+  if (!pricingData) return null;
+  const modelData = pricingData.models[model];
+  if (!modelData) return null;
+  const rate = pricingData.exchangeRate || 7;
+
+  if (model === 'gpt-image-2') {
+    const key = resolution.toUpperCase();
+    const p = modelData.prices[key];
+    return p ? `¥${p.cny.toFixed(4)}` : null;
+  }
+
+  if (model === 'gpt-image-2-official') {
+    const q = quality === 'auto' ? 'low' : quality;
+    const sizePrices = modelData.prices[size];
+    if (!sizePrices) return null;
+    const resPrices = sizePrices[resolution.toUpperCase()];
+    if (!resPrices) return null;
+    const price = resPrices[q];
+    return price !== undefined ? `¥${(price * rate).toFixed(5)}` : null;
+  }
+
+  return null;
+}
+
 export const RESOLUTIONS = [
   { value: '1k', label: '1K', price: '¥0.0420' },
   { value: '2k', label: '2K', price: '¥0.0840' },

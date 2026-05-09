@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { ConfigProvider, theme, Segmented, Masonry, Select, Button, Modal, message } from 'antd';
 import { PlusOutlined, SettingOutlined, EyeOutlined, CopyOutlined, ThunderboltOutlined, PictureOutlined, CloudUploadOutlined, DownloadOutlined } from '@ant-design/icons';
-import { api, RESOLUTIONS, SIZES, SIZE_4K, MODELS, QUALITIES } from './api.js';
+import { api, RESOLUTIONS, SIZES, SIZE_4K, MODELS, QUALITIES, loadPricing, getPrice } from './api.js';
 import { useDataLoader, PAGE_SIZE } from './hooks/useDataLoader.js';
 import { VerticalPagination } from './components/VerticalPagination.jsx';
 import { ResizableTextArea } from './components/ResizableTextArea.jsx';
@@ -208,6 +208,10 @@ export default function App() {
     load(tab, 2);
     load(tab, 3);
   }, [tab, load, clearCache]);
+
+  useEffect(() => {
+    loadPricing();
+  }, []);
 
   useEffect(() => {
     api.getAllSettings().then(r => {
@@ -563,7 +567,7 @@ export default function App() {
     );
   };
 
-  const currentPrice = RESOLUTIONS.find(r => r.value === resolution)?.price || '';
+  const currentPrice = getPrice(currentModel, resolution, size, currentQuality) || RESOLUTIONS.find(r => r.value === resolution)?.price || '';
   const availableSizes = resolution === '4k'
     ? SIZES.filter(s => s.value === 'auto' || SIZE_4K.includes(s.value))
     : SIZES;
