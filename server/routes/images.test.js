@@ -21,7 +21,8 @@ describe('Images API', () => {
   it('GET /api/images?type=user returns empty array', async () => {
     const res = await request(app).get('/api/images?type=user');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual([]);
+    expect(res.body.items).toEqual([]);
+    expect(res.body.total).toBe(0);
   });
 
   it('POST /api/images/upload uploads a base64 image', async () => {
@@ -36,9 +37,9 @@ describe('Images API', () => {
   it('GET /api/images?type=user returns uploaded image', async () => {
     const res = await request(app).get('/api/images?type=user');
     expect(res.status).toBe(200);
-    expect(res.body.length).toBe(1);
-    expect(res.body[0].original_name).toBe('test.png');
-    expect(res.body[0].data).toBeUndefined();
+    expect(res.body.items.length).toBe(1);
+    expect(res.body.items[0].original_name).toBe('test.png');
+    expect(res.body.items[0].data).toBeUndefined();
   });
 
   it('GET /api/images/:id/data returns 410 (deprecated endpoint)', async () => {
@@ -52,6 +53,6 @@ describe('Images API', () => {
     expect(res.status).toBe(200);
 
     const list = await request(app).get('/api/images?type=user');
-    expect(list.body.length).toBe(0);
+    expect(list.body.items.length).toBe(0);
   });
 });
