@@ -8,13 +8,6 @@ export const generateRouter = Router();
 // 并发限制
 const MAX_CONCURRENT_GENERATIONS = 3;
 
-function getActiveGenerationCount() {
-  const row = getDb().prepare(
-    "SELECT COUNT(*) as c FROM generated_images WHERE status = 'generating'"
-  ).get();
-  return row.c;
-}
-
 // 请求去重窗口（毫秒）
 const DEDUP_WINDOW_MS = 30000;
 
@@ -59,7 +52,7 @@ async function processImageUrl(url) {
     const filePath = path.join(getUploadsDir(), filename);
 
     if (fs.existsSync(filePath)) {
-      const buffer = fs.readFileSync(filePath);
+      const buffer = await fs.promises.readFile(filePath);
       const base64 = buffer.toString('base64');
       // 检测图片类型
       const ext = filename.split('.').pop().toLowerCase();
@@ -115,7 +108,7 @@ async function downloadAndSaveImage(imageUrl, taskId) {
       const filePath = `/uploads/${filename}`;
       const absolutePath = path.join(getUploadsDir(), filename);
 
-      fs.writeFileSync(absolutePath, buffer);
+      await fs.promises.writeFile(absolutePath, buffer);
 
       db.prepare(`
         UPDATE generated_images
@@ -160,45 +153,61 @@ generateRouter.post('/generate', async (req, res) => {
     return res.status(400).json({ error: '请先设置 API Key' });
   }
 
-  // 并发限制检查
-  if (getActiveGenerationCount() >= MAX_CONCURRENT_GENERATIONS) {
-    return res.status(429).json({ error: `最多同时进行 ${MAX_CONCURRENT_GENERATIONS} 个生成任务，请稍后再试` });
-  }
-
-  // 请求去重：查询数据库中最近 30 秒内相同 request_hash 的记录
   const requestHash = computeRequestHash(prompt, resolution, size, image_urls);
-  const recent = db.prepare(`
-    SELECT id, task_id, status, file_path, created_at
-    FROM generated_images
-    WHERE request_hash = ?
-    ORDER BY created_at DESC LIMIT 1
-  `).get(requestHash);
 
-  if (recent) {
-    const age = Date.now() - new Date(recent.created_at).getTime();
+  // 原子事务：并发限制检查 + 去重检查 + 插入
+  let genId;
+  try {
+    const tx = db.transaction(() => {
+      const row = db.prepare("SELECT COUNT(*) as c FROM generated_images WHERE status = 'generating'").get();
+      if (row.c >= MAX_CONCURRENT_GENERATIONS) {
+        throw new Error('CONCURRENT_LIMIT');
+      }
 
-    // 30 秒内的已完成任务，直接返回缓存结果
-    if (age < DEDUP_WINDOW_MS && recent.status === 'completed') {
-      return res.json({ taskId: recent.task_id, genId: recent.id, cached: true });
+      const recent = db.prepare(`
+        SELECT id, task_id, status, file_path, created_at
+        FROM generated_images
+        WHERE request_hash = ?
+        ORDER BY created_at DESC LIMIT 1
+      `).get(requestHash);
+
+      if (recent) {
+        const createdAt = new Date(recent.created_at.replace(' ', 'T') + 'Z').getTime();
+        const age = Date.now() - createdAt;
+        if (age < DEDUP_WINDOW_MS && recent.status === 'completed') {
+          throw Object.assign(new Error('DEDUP_COMPLETED'), { recent });
+        }
+        if (recent.status === 'generating') {
+          throw Object.assign(new Error('DEDUP_GENERATING'), { recent });
+        }
+      }
+
+      const info = db.prepare(`
+        INSERT INTO generated_images (prompt, status, resolution, size, ref_image_ids, request_hash)
+        VALUES (?, 'generating', ?, ?, ?, ?)
+      `).run(prompt, resolution || '1k', size || '1:1', JSON.stringify(image_urls || []), requestHash);
+
+      return info.lastInsertRowid;
+    });
+
+    genId = tx();
+  } catch (err) {
+    if (err.message === 'CONCURRENT_LIMIT') {
+      return res.status(429).json({ error: `最多同时进行 ${MAX_CONCURRENT_GENERATIONS} 个生成任务，请稍后再试` });
     }
-
-    // 正在生成中的任务，返回 duplicate
-    if (recent.status === 'generating') {
+    if (err.message === 'DEDUP_COMPLETED') {
+      return res.json({ taskId: err.recent.task_id, genId: err.recent.id, cached: true });
+    }
+    if (err.message === 'DEDUP_GENERATING') {
       return res.json({
-        taskId: recent.task_id,
-        genId: recent.id,
+        taskId: err.recent.task_id,
+        genId: err.recent.id,
         duplicate: true,
         message: '已有相同请求正在生成中'
       });
     }
+    throw err;
   }
-
-  const info = db.prepare(`
-    INSERT INTO generated_images (prompt, status, resolution, size, ref_image_ids, request_hash)
-    VALUES (?, 'generating', ?, ?, ?, ?)
-  `).run(prompt, resolution || '1k', size || '1:1', JSON.stringify(image_urls || []), requestHash);
-
-  const genId = info.lastInsertRowid;
 
   try {
     // 处理 image_urls，将本地文件路径转换为 base64 data URI
@@ -315,17 +324,31 @@ generateRouter.get('/tasks/:id', async (req, res) => {
 
     res.json(json);
   } catch (err) {
-    // 网络错误，不更新数据库状态，让前端继续轮询
     console.error(`Task ${id} query failed:`, err.message);
-    res.json({
-      code: 200,
-      data: {
-        id,
-        status: 'processing',
-        message: 'Query failed, please retry'
-      }
+    res.status(503).json({
+      code: 503,
+      data: { id, status: 'error', message: err.message || 'Query failed, please retry' }
     });
   }
+});
+
+// 取消/忽略正在生成的任务
+generateRouter.post('/tasks/:id/cancel', (req, res) => {
+  const { id } = req.params;
+  const db = getDb();
+  const row = db.prepare('SELECT id, status FROM generated_images WHERE task_id = ?').get(id);
+  if (!row) {
+    return res.status(404).json({ error: 'Task not found' });
+  }
+  if (row.status !== 'generating') {
+    return res.status(400).json({ error: 'Task is not in generating status' });
+  }
+  db.prepare(`
+    UPDATE generated_images
+    SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
+    WHERE task_id = ?
+  `).run(id);
+  res.json({ success: true });
 });
 
 // 获取正在生成的任务列表
@@ -342,6 +365,7 @@ generateRouter.get('/active', (req, res) => {
 
 // 后端主动轮询配置
 const POLL_INTERVAL = 5000; // 5秒轮询一次
+const TASK_TIMEOUT_MS = 5 * 60 * 1000; // 任务超时时间：5分钟
 let pollTimer = null;
 
 // 查询单个任务状态并处理
@@ -355,7 +379,7 @@ async function pollTask(taskId, apikey) {
   }
 
   try {
-    console.log(`[Poller] Checking task ${taskId}...`);
+    console.log(`[${new Date().toLocaleString()}] [Poller] Checking task ${taskId}...`);
     const resp = await fetchWithRetry(`https://api.apimart.ai/v1/tasks/${taskId}`, {
       headers: { Authorization: `Bearer ${apikey}` },
     });
@@ -364,12 +388,12 @@ async function pollTask(taskId, apikey) {
     if (json.code === 200 && json.data?.status === 'completed') {
       const imageUrl = json.data.result?.images?.[0]?.url?.[0];
       if (imageUrl) {
-        console.log(`[Poller] Task ${taskId} completed, downloading image...`);
+        console.log(`[${new Date().toLocaleString()}] [Poller] Task ${taskId} completed, downloading image...`);
         await downloadAndSaveImage(imageUrl, taskId);
       }
     } else if (json.data?.status === 'failed') {
       const errorMsg = json.data.error?.message || json.data.error || 'Unknown error';
-      console.log(`[Poller] Task ${taskId} failed: ${errorMsg}`);
+      console.log(`[${new Date().toLocaleString()}] [Poller] Task ${taskId} failed: ${errorMsg}`);
       db.prepare(`
         UPDATE generated_images
         SET status = 'failed', error_message = ?, updated_at = CURRENT_TIMESTAMP
@@ -378,7 +402,7 @@ async function pollTask(taskId, apikey) {
     }
     // submitted/processing 状态不做处理，下次继续轮询
   } catch (err) {
-    console.error(`[Poller] Task ${taskId} query failed:`, err.message);
+    console.error(`[${new Date().toLocaleString()}] [Poller] Task ${taskId} query failed:`, err.message);
   }
 }
 
@@ -392,20 +416,42 @@ async function pollAllTasks() {
   }
 
   const generatingTasks = db.prepare(`
-    SELECT task_id FROM generated_images
+    SELECT task_id, created_at FROM generated_images
     WHERE status = 'generating' AND task_id IS NOT NULL
+    ORDER BY created_at ASC
   `).all();
 
   if (generatingTasks.length === 0) {
     return;
   }
 
-  console.log(`[Poller] Found ${generatingTasks.length} generating tasks`);
+  const now = Date.now();
+  const validTasks = [];
+
+  for (const task of generatingTasks) {
+    const createdAt = new Date(task.created_at.replace(' ', 'T') + 'Z').getTime();
+    if (now - createdAt > TASK_TIMEOUT_MS) {
+      db.prepare(`
+        UPDATE generated_images
+        SET status = 'failed', error_message = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE task_id = ?
+      `).run('任务生成超时', task.task_id);
+      console.log(`[${new Date().toLocaleString()}] [Poller] Task ${task.task_id} timed out`);
+    } else {
+      validTasks.push(task);
+    }
+  }
+
+  if (validTasks.length === 0) {
+    return;
+  }
+
+  console.log(`[${new Date().toLocaleString()}] [Poller] Polling ${validTasks.length} valid tasks`);
 
   // 限制并发，每批最多 3 个
   const CONCURRENCY = 3;
-  for (let i = 0; i < generatingTasks.length; i += CONCURRENCY) {
-    const batch = generatingTasks.slice(i, i + CONCURRENCY);
+  for (let i = 0; i < validTasks.length; i += CONCURRENCY) {
+    const batch = validTasks.slice(i, i + CONCURRENCY);
     await Promise.all(
       batch.map(t => pollTask(t.task_id, apikeyRow.value))
     );
@@ -423,7 +469,7 @@ export function startPoller() {
 
   // 定时轮询
   pollTimer = setInterval(pollAllTasks, POLL_INTERVAL);
-  console.log(`[Poller] Started, interval: ${POLL_INTERVAL}ms`);
+  console.log(`[${new Date().toLocaleString()}] [Poller] Started, interval: ${POLL_INTERVAL}ms`);
 }
 
 // 停止轮询
@@ -431,7 +477,7 @@ export function stopPoller() {
   if (pollTimer) {
     clearInterval(pollTimer);
     pollTimer = null;
-    console.log('[Poller] Stopped');
+    console.log(`[${new Date().toLocaleString()}] [Poller] Stopped`);
   }
 }
 

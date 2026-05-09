@@ -54,7 +54,7 @@ imagesRouter.get('/', (req, res) => {
   }
 });
 
-imagesRouter.post('/upload', (req, res) => {
+imagesRouter.post('/upload', async (req, res) => {
   const { data, original_name } = req.body;
   const db = getDb();
 
@@ -89,7 +89,7 @@ imagesRouter.post('/upload', (req, res) => {
   const absolutePath = path.join(getUploadsDir(), filename);
 
   // 保存文件
-  fs.writeFileSync(absolutePath, buffer);
+  await fs.promises.writeFile(absolutePath, buffer);
 
   // 保存到数据库
   const info = db.prepare(
@@ -102,7 +102,7 @@ imagesRouter.post('/upload', (req, res) => {
 
 const VALID_IMAGE_TABLES = ['user_images', 'generated_images'];
 
-imagesRouter.delete('/:id', (req, res) => {
+imagesRouter.delete('/:id', async (req, res) => {
   const { type } = req.query;
   const table = type === 'user' ? 'user_images' : 'generated_images';
   const otherTable = type === 'user' ? 'generated_images' : 'user_images';
@@ -122,7 +122,7 @@ imagesRouter.delete('/:id', (req, res) => {
       const filename = row.file_path.split('/').pop();
       const absolutePath = path.join(getUploadsDir(), filename);
       if (fs.existsSync(absolutePath)) {
-        fs.unlinkSync(absolutePath);
+        await fs.promises.unlink(absolutePath);
       }
     }
   }
