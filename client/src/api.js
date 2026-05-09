@@ -49,7 +49,8 @@ async function request(url, opts = {}, timeout = DEFAULT_TIMEOUT) {
 }
 
 export const api = {
-  getImages: (type) => request(`/images?type=${type}`),
+  getImages: (type, page = 1, limit = 20) =>
+    request(`/images?type=${type}&page=${page}&limit=${limit}`),
 
   uploadImage: (data, original_name) =>
     request('/images/upload', {
