@@ -6,12 +6,17 @@ import fs from 'fs';
 export const generateRouter = Router();
 
 // 并发限制
-const MAX_CONCURRENT_GENERATIONS = 5;
-const activeGenerations = new Set();
+const MAX_CONCURRENT_GENERATIONS = 3;
 
-// 请求去重缓存 (30秒内相同请求返回相同结果)
-const recentRequests = new Map();
-const REQUEST_CACHE_TTL = 30000;
+function getActiveGenerationCount() {
+  const row = getDb().prepare(
+    "SELECT COUNT(*) as c FROM generated_images WHERE status = 'generating'"
+  ).get();
+  return row.c;
+}
+
+// 请求去重窗口（毫秒）
+const DEDUP_WINDOW_MS = 30000;
 
 // 带重试的 fetch
 async function fetchWithRetry(url, options, maxRetries = 3) {
@@ -107,9 +112,10 @@ async function downloadAndSaveImage(imageUrl, taskId) {
 
       const sha256 = computeSha256(buffer);
       const filename = `${sha256}.png`;
-      const filePath = path.join(getUploadsDir(), filename);
+      const filePath = `/uploads/${filename}`;
+      const absolutePath = path.join(getUploadsDir(), filename);
 
-      fs.writeFileSync(filePath, buffer);
+      fs.writeFileSync(absolutePath, buffer);
 
       db.prepare(`
         UPDATE generated_images
@@ -118,7 +124,7 @@ async function downloadAndSaveImage(imageUrl, taskId) {
       `).run(filePath, sha256, taskId);
 
       console.log(`[Download] Task ${taskId} completed, saved to ${filename}`);
-      return { success: true, filePath: `/api/images/uploads/${filename}` };
+      return { success: true, filePath };
     } catch (err) {
       lastError = err;
       console.error(`[Download] Attempt ${attempt + 1} failed for task ${taskId}:`, err.message);
@@ -155,31 +161,36 @@ generateRouter.post('/generate', async (req, res) => {
   }
 
   // 并发限制检查
-  if (activeGenerations.size >= MAX_CONCURRENT_GENERATIONS) {
+  if (getActiveGenerationCount() >= MAX_CONCURRENT_GENERATIONS) {
     return res.status(429).json({ error: `最多同时进行 ${MAX_CONCURRENT_GENERATIONS} 个生成任务，请稍后再试` });
   }
 
-  // 请求去重
+  // 请求去重：查询数据库中最近 30 秒内相同 request_hash 的记录
   const requestHash = computeRequestHash(prompt, resolution, size, image_urls);
-  const cached = recentRequests.get(requestHash);
-  if (cached && Date.now() - cached.timestamp < REQUEST_CACHE_TTL) {
-    return res.json({ taskId: cached.taskId, genId: cached.genId, cached: true });
-  }
-
-  // 检查是否有相同的正在生成中的请求
-  const existingPending = db.prepare(`
-    SELECT id, task_id FROM generated_images
-    WHERE request_hash = ? AND status = 'generating'
+  const recent = db.prepare(`
+    SELECT id, task_id, status, file_path, created_at
+    FROM generated_images
+    WHERE request_hash = ?
     ORDER BY created_at DESC LIMIT 1
   `).get(requestHash);
 
-  if (existingPending) {
-    return res.json({
-      taskId: existingPending.task_id,
-      genId: existingPending.id,
-      duplicate: true,
-      message: '已有相同请求正在生成中'
-    });
+  if (recent) {
+    const age = Date.now() - new Date(recent.created_at).getTime();
+
+    // 30 秒内的已完成任务，直接返回缓存结果
+    if (age < DEDUP_WINDOW_MS && recent.status === 'completed') {
+      return res.json({ taskId: recent.task_id, genId: recent.id, cached: true });
+    }
+
+    // 正在生成中的任务，返回 duplicate
+    if (recent.status === 'generating') {
+      return res.json({
+        taskId: recent.task_id,
+        genId: recent.id,
+        duplicate: true,
+        message: '已有相同请求正在生成中'
+      });
+    }
   }
 
   const info = db.prepare(`
@@ -188,7 +199,6 @@ generateRouter.post('/generate', async (req, res) => {
   `).run(prompt, resolution || '1k', size || '1:1', JSON.stringify(image_urls || []), requestHash);
 
   const genId = info.lastInsertRowid;
-  activeGenerations.add(genId);
 
   try {
     // 处理 image_urls，将本地文件路径转换为 base64 data URI
@@ -220,9 +230,6 @@ generateRouter.post('/generate', async (req, res) => {
       const taskId = json.data[0].task_id;
       db.prepare('UPDATE generated_images SET task_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(taskId, genId);
 
-      // 缓存请求
-      recentRequests.set(requestHash, { taskId, genId, timestamp: Date.now() });
-
       res.json({ taskId, genId });
     } else {
       db.prepare("UPDATE generated_images SET status = 'failed', error_message = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(
@@ -242,8 +249,6 @@ generateRouter.post('/generate', async (req, res) => {
       genId
     );
     res.status(500).json({ error: err.message || 'fetch failed' });
-  } finally {
-    activeGenerations.delete(genId);
   }
 });
 
@@ -256,13 +261,12 @@ generateRouter.get('/tasks/:id', async (req, res) => {
 
   // 如果已经完成，直接返回结果
   if (genRow?.status === 'completed' && genRow.file_path) {
-    const filename = genRow.file_path.split('/').pop();
     return res.json({
       code: 200,
       data: {
         id,
         status: 'completed',
-        filePath: `/api/images/uploads/${filename}`
+        filePath: genRow.file_path
       }
     });
   }
@@ -398,10 +402,14 @@ async function pollAllTasks() {
 
   console.log(`[Poller] Found ${generatingTasks.length} generating tasks`);
 
-  // 并行轮询所有任务
-  await Promise.all(
-    generatingTasks.map(t => pollTask(t.task_id, apikeyRow.value))
-  );
+  // 限制并发，每批最多 3 个
+  const CONCURRENCY = 3;
+  for (let i = 0; i < generatingTasks.length; i += CONCURRENCY) {
+    const batch = generatingTasks.slice(i, i + CONCURRENCY);
+    await Promise.all(
+      batch.map(t => pollTask(t.task_id, apikeyRow.value))
+    );
+  }
 }
 
 // 启动轮询
@@ -427,12 +435,3 @@ export function stopPoller() {
   }
 }
 
-// 定期清理过期的请求缓存
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, value] of recentRequests.entries()) {
-    if (now - value.timestamp > REQUEST_CACHE_TTL) {
-      recentRequests.delete(key);
-    }
-  }
-}, 60000);
