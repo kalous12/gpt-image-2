@@ -65,7 +65,7 @@ async function processImageUrl(url) {
 }
 
 // 参数验证
-function validateGenerateParams({ prompt, resolution, size, n }) {
+function validateGenerateParams({ prompt, resolution, size, n, model, quality }) {
   const errors = [];
 
   if (!prompt || typeof prompt !== 'string') {
@@ -86,6 +86,16 @@ function validateGenerateParams({ prompt, resolution, size, n }) {
 
   if (n && (!Number.isInteger(n) || n < 1 || n > 4)) {
     errors.push('n must be an integer between 1 and 4');
+  }
+
+  const validModels = ['gpt-image-2', 'gpt-image-2-official'];
+  if (model && !validModels.includes(model)) {
+    errors.push(`model must be one of: ${validModels.join(', ')}`);
+  }
+
+  const validQualities = ['auto', 'low', 'medium', 'high'];
+  if (quality && !validQualities.includes(quality)) {
+    errors.push(`quality must be one of: ${validQualities.join(', ')}`);
   }
 
   return errors;
@@ -139,10 +149,10 @@ async function downloadAndSaveImage(imageUrl, taskId) {
 }
 
 generateRouter.post('/generate', async (req, res) => {
-  const { prompt, resolution, size, n, image_urls } = req.body;
+  const { prompt, resolution, size, n, image_urls, model, quality } = req.body;
 
   // 参数验证
-  const errors = validateGenerateParams({ prompt, resolution, size, n });
+  const errors = validateGenerateParams({ prompt, resolution, size, n, model, quality });
   if (errors.length > 0) {
     return res.status(400).json({ error: errors.join('; ') });
   }
@@ -153,7 +163,8 @@ generateRouter.post('/generate', async (req, res) => {
     return res.status(400).json({ error: '请先设置 API Key' });
   }
 
-  const requestHash = computeRequestHash(prompt, resolution, size, image_urls);
+  const actualModel = model || 'gpt-image-2';
+  const requestHash = computeRequestHash(prompt, resolution, size, image_urls, actualModel, quality);
 
   // 原子事务：并发限制检查 + 去重检查 + 插入
   let genId;
@@ -217,13 +228,18 @@ generateRouter.post('/generate', async (req, res) => {
     }
 
     const body = {
-      model: 'gpt-image-2',
+      model: actualModel,
       prompt,
       n: n || 1,
       size: size || '1:1',
       resolution: resolution || '1k',
     };
     if (processedImageUrls?.length) body.image_urls = processedImageUrls;
+
+    // gpt-image-2-official 支持 quality 参数
+    if (actualModel === 'gpt-image-2-official' && quality) {
+      body.quality = quality;
+    }
 
     const resp = await fetchWithRetry('https://api.apimart.ai/v1/images/generations', {
       method: 'POST',
@@ -263,6 +279,7 @@ generateRouter.post('/generate', async (req, res) => {
 
 generateRouter.get('/tasks/:id', async (req, res) => {
   const { id } = req.params;
+  const force = req.query.force === 'true';
   const db = getDb();
   const apikeyRow = db.prepare("SELECT value FROM settings WHERE key = 'apikey'").get();
 
@@ -280,18 +297,19 @@ generateRouter.get('/tasks/:id', async (req, res) => {
     });
   }
 
-  // 如果已经失败，返回失败状态
-  if (genRow?.status === 'failed') {
+  // 如果已经失败且不是强制刷新，返回失败状态
+  if (genRow?.status === 'failed' && !force) {
     return res.json({
       code: 200,
       data: {
         id,
         status: 'failed',
-        error: { message: genRow.error_message || 'Generation failed' }
+        error: { message: genRow.error_message || '生成失败，请重试' }
       }
     });
   }
 
+  // 强制刷新或任务仍在处理中，去 API 查询最新状态
   try {
     const resp = await fetchWithRetry(`https://api.apimart.ai/v1/tasks/${id}`, {
       headers: { Authorization: `Bearer ${apikeyRow?.value || ''}` },
