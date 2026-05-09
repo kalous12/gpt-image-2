@@ -48,6 +48,15 @@ describe('Images API', () => {
     expect(res.body.error).toContain('deprecated');
   });
 
+  it('POST /api/images/upload rejects non-image base64', async () => {
+    // dGVzdHRlc3Q= is "testtest" (8 bytes) — large enough but wrong magic numbers
+    const res = await request(app)
+      .post('/api/images/upload')
+      .send({ data: 'data:image/png;base64,dGVzdHRlc3Q=', original_name: 'fake.png' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('Content does not match');
+  });
+
   it('DELETE /api/images/:id removes image', async () => {
     const res = await request(app).delete('/api/images/1?type=user');
     expect(res.status).toBe(200);

@@ -135,6 +135,9 @@ describe('Generate API', () => {
     expect(res1.body.taskId).toBe('task_cached_1');
     expect(res1.body.cached).toBeUndefined();
 
+    // 将任务状态设为已完成，模拟缓存场景
+    getDb().prepare("UPDATE generated_images SET status = 'completed' WHERE task_id = ?").run('task_cached_1');
+
     // 第二个相同请求在30秒内应该返回 cached 标记
     const res2 = await request(app).post('/api/generate').send({
       prompt: 'same prompt for cache test',
@@ -224,6 +227,42 @@ describe('Generate API', () => {
     const record = getDb().prepare('SELECT status, error_message FROM generated_images WHERE task_id = ?').get('task_fail_123');
     expect(record.status).toBe('failed');
     expect(record.error_message).toBeDefined();
+
+    globalThis.fetch = undefined;
+  });
+
+  it('POST /api/generate rejects when concurrent limit reached', async () => {
+    getDb().prepare("DELETE FROM generated_images").run();
+
+    // 插入 3 个 generating 任务，达到并发上限
+    for (let i = 1; i <= 3; i++) {
+      getDb().prepare(
+        "INSERT INTO generated_images (prompt, status, task_id) VALUES (?, 'generating', ?)"
+      ).run(`test${i}`, `concurrent_${i}`);
+    }
+
+    const res = await request(app).post('/api/generate').send({
+      prompt: 'too many concurrent',
+      resolution: '1k',
+      size: '1:1',
+    });
+    expect(res.status).toBe(429);
+    expect(res.body.error).toContain('最多同时进行');
+  });
+
+  it('GET /api/tasks/:id returns 503 on query error', async () => {
+    getDb().prepare(
+      "INSERT INTO generated_images (prompt, status, task_id) VALUES ('test', 'generating', 'task_err_1')"
+    ).run();
+
+    const mockFetch = vi.fn().mockRejectedValue(new Error('Network timeout'));
+    globalThis.fetch = mockFetch;
+
+    const res = await request(app).get('/api/tasks/task_err_1');
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe(503);
+    expect(res.body.data.status).toBe('error');
+    expect(res.body.data.message).toContain('Network timeout');
 
     globalThis.fetch = undefined;
   });
