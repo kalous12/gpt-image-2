@@ -6,7 +6,7 @@ import fs from 'fs';
 export const generateRouter = Router();
 
 // 并发限制
-const MAX_CONCURRENT_GENERATIONS = 3;
+const MAX_CONCURRENT_GENERATIONS = 5;
 
 // 请求去重窗口（毫秒）
 const DEDUP_WINDOW_MS = 30000;
@@ -453,8 +453,8 @@ generateRouter.get('/active', (req, res) => {
 });
 
 // 后端主动轮询配置
-const POLL_INTERVAL = 5000; // 5秒轮询一次
-const TASK_TIMEOUT_MS = 5 * 60 * 1000; // 任务超时时间：5分钟
+const POLL_INTERVAL = 10000; // 10秒轮询一次
+const TASK_TIMEOUT_MS = 10 * 60 * 1000; // 任务超时时间：10分钟
 let pollTimer = null;
 
 // 查询单个任务状态并处理
@@ -538,7 +538,7 @@ async function pollAllTasks() {
   console.log(`[${new Date().toLocaleString()}] [Poller] Polling ${validTasks.length} valid tasks`);
 
   // 限制并发，每批最多 3 个
-  const CONCURRENCY = 3;
+  const CONCURRENCY = 5;
   for (let i = 0; i < validTasks.length; i += CONCURRENCY) {
     const batch = validTasks.slice(i, i + CONCURRENCY);
     await Promise.all(
