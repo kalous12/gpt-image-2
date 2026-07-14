@@ -21,7 +21,7 @@ app.use('/uploads', express.static(getUploadsDir(), {
 }));
 
 // Serve materials images as static files
-app.use('/materials/images', express.static(path.join(__dirname, '..', 'materials', 'images'), {
+app.use('/materials/data/images', express.static(path.join(__dirname, '..', 'materials', 'data', 'images'), {
   maxAge: '7d',
   etag: true
 }));
